@@ -1,65 +1,115 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma.service';
+import * as bcrypt from 'bcrypt';
 
-export interface User {
-  id: number;
-  username: string;
-  password: string;
+interface UserWithoutPassword {
+  id: string;
+  name: string;
+  email: string;
   role: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 @Injectable()
 export class UsersService {
-  private users: User[] = [
-    { id: 1, username: 'admin', password: 'admin', role: 'admin' },
-    { id: 2, username: 'user', password: 'user', role: 'user' },
-  ];
+  constructor(private prisma: PrismaService) {}
 
-  findAll(): Omit<User, 'password'>[] {
-    return this.users.map(({ password, ...rest }) => rest);
+  async findAll(): Promise<UserWithoutPassword[]> {
+    const users = await this.prisma.user.findMany();
+    return users.map(({ password, ...rest }) => rest);
   }
 
-  findOne(id: number): Omit<User, 'password'> {
-    const user = this.users.find((u) => u.id === id);
+  async findOne(id: string): Promise<UserWithoutPassword> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+    });
     if (!user) throw new NotFoundException('User not found');
     const { password, ...rest } = user;
     return rest;
   }
 
-  create(body: {
-    username: string;
+  async create(data: {
+    name: string;
+    email: string;
     password: string;
-    role: string;
-  }): Omit<User, 'password'> {
-    const id = Math.max(...this.users.map((u) => u.id), 0) + 1;
-    const user: User = { id, ...body };
-    this.users.push(user);
+    role?: string;
+  }): Promise<UserWithoutPassword> {
+    const hashedPassword = await bcrypt.hash(data.password, 10);
+    const user = await this.prisma.user.create({
+      data: {
+        ...data,
+        password: hashedPassword,
+      },
+    });
     const { password, ...rest } = user;
     return rest;
   }
 
-  update(id: number, body: Partial<Omit<User, 'id'>>): Omit<User, 'password'> {
-    const idx = this.users.findIndex((u) => u.id === id);
-    if (idx === -1) throw new NotFoundException('User not found');
-    this.users[idx] = { ...this.users[idx], ...body, id }; // не дозволяємо змінювати id
-    const { password, ...rest } = this.users[idx];
+  async update(
+    id: string,
+    data: Partial<{
+      name: string;
+      email: string;
+      password: string;
+      role: string;
+    }>,
+  ): Promise<UserWithoutPassword> {
+    if (data.password) {
+      data.password = await bcrypt.hash(data.password, 10);
+    }
+
+    const user = await this.prisma.user.update({
+      where: { id },
+      data,
+    });
+
+    const { password, ...rest } = user;
     return rest;
   }
 
-  patch(id: number, body: Partial<Omit<User, 'id'>>): Omit<User, 'password'> {
-    return this.update(id, body);
+  async patch(
+    id: string,
+    data: Partial<{
+      name: string;
+      email: string;
+      password: string;
+      role: string;
+    }>,
+  ): Promise<UserWithoutPassword> {
+    return this.update(id, data);
   }
 
-  remove(id: number): Omit<User, 'password'> {
-    const idx = this.users.findIndex((u) => u.id === id);
-    if (idx === -1) throw new NotFoundException('User not found');
-    const [removed] = this.users.splice(idx, 1);
-    const { password, ...rest } = removed;
+  async remove(id: string): Promise<UserWithoutPassword> {
+    const user = await this.prisma.user.delete({
+      where: { id },
+    });
+    const { password, ...rest } = user;
     return rest;
   }
 
-  validateUser(username: string, password: string): User | undefined {
-    return this.users.find(
-      (user) => user.username === username && user.password === password,
-    );
+  async findByEmail(email: string) {
+    return this.prisma.user.findUnique({
+      where: { email },
+    });
+  }
+
+  async validateUser(
+    email: string,
+    password: string,
+  ): Promise<UserWithoutPassword | null> {
+    const user = await this.findByEmail(email);
+    if (!user) return null;
+
+    try {
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (isPasswordValid) {
+        const { password, ...result } = user;
+        return result;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 }
